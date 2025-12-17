@@ -1,7 +1,7 @@
-cython
 numpy<2.0.0
 scikit-surprise
 streamlit
 pandas
 scikit-learn
 scipy
+
