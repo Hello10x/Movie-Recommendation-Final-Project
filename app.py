@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import os
+import gdown  
 
 from hybrid_recommender import HybridRecommender
 
-st.set_page_config(page_title="MovieFlix AI", page_icon="🍿", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Movie Recommendation GK - Ken", page_icon="🍿", layout="wide", initial_sidebar_state="expanded")
 
 # ============================================
 # 0. CSS TÙY CHỈNH
@@ -26,32 +27,54 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Hàm tải dữ liệu và cache lại để tăng tốc độ
-@st.cache_data
-def load_data():
+# ============================================
+# 1. LOAD DỮ LIỆU TỪ DRIVE
+# ============================================
+@st.cache_data(show_spinner="Đang tải dữ liệu Rating từ Google Drive...")
+def load_ratings_from_drive():
     file_path = 'ratings_clean.csv'  # Tên file sẽ lưu trên server
     
     # Kiểm tra nếu file chưa tồn tại thì mới tải
     if not os.path.exists(file_path):
-        # ID file 
+        # ID file của bạn
         file_id = '1ZLWgsnkcsJ3ktvtit3t-tS3MXaInuMQC'
         url = f'https://drive.google.com/uc?id={file_id}'
         
-        # Tải file về
-        gdown.download(url, file_path, quiet=False)
+        # Tải file về (quiet=False để xem log nếu cần)
+        try:
+            gdown.download(url, file_path, quiet=False)
+        except Exception as e:
+            st.error(f"Lỗi tải file từ Drive: {e}")
+            return pd.DataFrame() # Trả về rỗng để không crash app
     
     # Đọc file CSV
-    df = pd.read_csv(file_path)
-    return df
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        return df
+    return pd.DataFrame()
 
 # ============================================
-# 1. LOAD DỮ LIỆU & HỆ THỐNG
+# 2. KHỞI TẠO HỆ THỐNG
 # ============================================
 @st.cache_resource(show_spinner="Đang khởi động AI & Load Metadata...")
 def load_system():
-    if not os.path.exists("./data_clean"): return None, None
-    hybrid_sys = HybridRecommender()
+    # 1. Tải Ratings trước
+    df_ratings = load_ratings_from_drive()
     
+    if df_ratings.empty:
+        st.error("Không tải được dữ liệu Ratings. Vui lòng kiểm tra kết nối mạng hoặc Link Drive.")
+        return None, None
+
+    # 2. Kiểm tra thư mục dữ liệu nhỏ (movies, actors...)
+    if not os.path.exists("./data_clean"): 
+        st.error("Không tìm thấy thư mục ./data_clean. Bạn đã upload các file nhỏ lên GitHub chưa?")
+        return None, None
+
+    # 3. Khởi tạo HybridRecommender và TRUYỀN DATAFRAME VÀO
+    # [QUAN TRỌNG]: Phải truyền df_ratings vào đây
+    hybrid_sys = HybridRecommender(ratings_df=df_ratings, data_dir="./data_clean")
+    
+    # 4. Load Metadata (để hiển thị giao diện)
     meta = {}
     meta['movies'] = pd.read_csv("./data_clean/movies_clean.csv")
     
@@ -68,12 +91,14 @@ def load_system():
     
     return hybrid_sys, meta
 
+# --- GỌI HÀM LOAD SYSTEM ---
 hybrid, metadata = load_system()
 
-if not hybrid: st.stop()
+if not hybrid: 
+    st.stop() # Dừng app nếu load lỗi
 
 # ============================================
-# 2. SESSION STATE
+# 3. SESSION STATE
 # ============================================
 if 'page' not in st.session_state: st.session_state['page'] = 'home'
 if 'selected_movie_id' not in st.session_state: st.session_state['selected_movie_id'] = None
@@ -86,7 +111,7 @@ if 'search_genre' not in st.session_state: st.session_state['search_genre'] = "T
 if 'current_page_num' not in st.session_state: st.session_state['current_page_num'] = 1
 
 # ============================================
-# 3. HELPER FUNCTIONS
+# 4. HELPER FUNCTIONS
 # ============================================
 POSTER_BASE = "https://image.tmdb.org/t/p/w500"
 PLACEHOLDER = "https://via.placeholder.com/500x750.png?text=No+Image"
@@ -146,7 +171,7 @@ def click_genre(genre_name):
     st.session_state['page'] = 'home'
     st.rerun()
 
-# [QUAN TRỌNG] Hàm render_grid CÓ THAM SỐ key_prefix
+# Hàm render_grid
 def render_grid(df, cols=4, key_prefix="grid"):
     if df is None or df.empty: 
         st.warning("Không tìm thấy phim phù hợp.")
@@ -176,7 +201,6 @@ def render_grid(df, cols=4, key_prefix="grid"):
                     st.write(f"**{m['title']}**")
                     st.caption(f"⭐ {m['vote_average']:.1f}")
                     
-                    # [QUAN TRỌNG] Tạo key duy nhất: prefix + movie_id
                     unique_key = f"{key_prefix}_{m['movie_id']}"
                     if st.button("Chi tiết", key=unique_key):
                         go_to_movie(m['movie_id'])
@@ -192,7 +216,7 @@ def render_chart(name, cap, col=None):
         else: st.caption(msg)
 
 # ============================================
-# 4. SIDEBAR
+# 5. SIDEBAR
 # ============================================
 with st.sidebar:
     st.title("🍿 MovieFlix")
@@ -202,7 +226,11 @@ with st.sidebar:
         uid = st.number_input("User ID:", min_value=1, value=st.session_state['user_id'])
         st.session_state['user_id'] = uid
     else:
-        new_id = int(hybrid.svd.ratings['user_id'].max()) + 1
+        # Lấy ID mới dựa trên dữ liệu ratings đã tải
+        if not hybrid.ratings.empty:
+            new_id = int(hybrid.ratings['user_id'].max()) + 1
+        else:
+            new_id = 1
         st.info(f"🆕 ID mới của bạn: **{new_id}**")
         st.session_state['user_id'] = new_id
     
@@ -253,12 +281,12 @@ if st.session_state['page'] == 'home':
 
     # HIỂN THỊ KẾT QUẢ
     
-    # 1. Đang Tìm kiếm -> key_prefix="search"
+    # 1. Đang Tìm kiếm
     if st.session_state['search_query']:
         st.subheader(f"🔍 Kết quả cho: '{st.session_state['search_query']}'")
         render_grid(hybrid.search_hybrid(st.session_state['search_query'], top_k=50), key_prefix="search")
         
-    # 2. Đang Lọc Thể loại -> key_prefix="genre"
+    # 2. Đang Lọc Thể loại
     elif st.session_state['search_genre'] != "Tất cả":
         st.subheader(f"🎭 Thể loại: {st.session_state['search_genre']}")
         mask = hybrid.cb.movies['genres_str'].str.contains(st.session_state['search_genre'], na=False)
@@ -266,14 +294,14 @@ if st.session_state['page'] == 'home':
         
     # 3. Mặc định: Gợi ý + Kho Phim
     else:
-        # A. Gợi ý -> key_prefix="rec"
+        # A. Gợi ý
         st.subheader(f"✨ Gợi ý dành riêng cho User {uid}")
         recs = hybrid.recommend_based_on_behavior(uid, top_k=8)
         render_grid(recs, cols=4, key_prefix="rec")
         
         st.markdown("---")
         
-        # B. Kho Phim -> key_prefix="all"
+        # B. Kho Phim
         st.subheader("🎬 Kho Phim (Tất cả)")
         
         all_movies_sorted = metadata['movies'].sort_values(by='popularity', ascending=False)
@@ -435,4 +463,3 @@ elif st.session_state['page'] == 'viz':
         st.subheader("Phân bố độ phổ biến")
 
         render_chart("popularity_hist.png", "Histogram Popularity")
-
