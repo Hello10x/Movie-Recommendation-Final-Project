@@ -4,29 +4,29 @@ import os
 import time
 from collections import Counter
 
+
 from recommender.svd_recommender import SVDRecommender
 from recommender.contentbase_recommender import ContentBasedRecommender
 from recommender.knn_recommender import KNNRecommender
 
+
 class HybridRecommender:
     def __init__(self, data_dir="./data_clean", cache_dir="./cache_recommender"):
-        print("🚀 Initializing Hybrid System (Final Fix)...")
+        print("🚀 Initializing Hybrid System (Final - Fixed Collection Logic)...")
         
         self.data_dir = data_dir
         self.movies_path = f"{data_dir}/movies_clean.csv"
         self.ratings_path = f"{data_dir}/ratings_clean.csv"
-        
-        #  Khai báo đường dẫn file Users để tránh lỗi AttributeError
         self.users_path = f"{data_dir}/users_clean.csv"
+        self.collection_path = f"{data_dir}/collection_clean.csv"
         
         # File Log hành vi
         self.search_logs_path = f"{data_dir}/search_history.csv"
         self.view_logs_path = f"{data_dir}/view_history.csv"
         
-        # Khởi tạo file log nếu chưa có
         self._init_log_files()
 
-        # --- 1. KHỞI TẠO 3 MODEL CON ---
+        # --- KHỞI TẠO 3 MODEL CON ---
         self.cb = ContentBasedRecommender(
             movies_path=self.movies_path,
             genres_path=f"{data_dir}/genres_clean.csv",
@@ -36,7 +36,7 @@ class HybridRecommender:
             actors_path=f"{data_dir}/actors_clean.csv",
             movies_cast_path=f"{data_dir}/movies_cast_clean.csv",
             keywords_path=f"{data_dir}/keywords_clean.csv",
-            collection_path=f"{data_dir}/collection_clean.csv",
+            collection_path=self.collection_path,
             cache_dir=f"{cache_dir}/cache_cb"
         )
 
@@ -55,21 +55,14 @@ class HybridRecommender:
         self._load_all_models()
 
     def _init_log_files(self):
-        """Tạo các file log CSV với cấu trúc mới"""
-        # [FIX] Tạo file users nếu chưa có
         if not os.path.exists(self.users_path):
             pd.DataFrame(columns=["user_id"]).to_csv(self.users_path, index=False)
-
-        # Search History: Thêm cột 'type'
         if not os.path.exists(self.search_logs_path):
             pd.DataFrame(columns=["user_id", "query", "type", "timestamp"]).to_csv(self.search_logs_path, index=False)
-            
-        # View History
         if not os.path.exists(self.view_logs_path):
             pd.DataFrame(columns=["user_id", "movie_id", "timestamp"]).to_csv(self.view_logs_path, index=False)
 
     def _load_all_models(self):
-        """Load và Train các model con"""
         print("--- Loading Sub-models ---")
         self.cb.load_data()
         self.cb.vectorize()
@@ -88,12 +81,7 @@ class HybridRecommender:
     # 1. LOGGING
     # ====================================================
     def log_search(self, user_id, query, search_type='keyword'):
-        new_row = {
-            "user_id": user_id, 
-            "query": query, 
-            "type": search_type, 
-            "timestamp": int(time.time())
-        }
+        new_row = {"user_id": user_id, "query": query, "type": search_type, "timestamp": int(time.time())}
         pd.DataFrame([new_row]).to_csv(self.search_logs_path, mode='a', header=False, index=False)
         print(f"📝 Logged: User {user_id} -> {search_type}: '{query}'")
 
@@ -122,7 +110,6 @@ class HybridRecommender:
     def analyze_user_interest(self, user_id):
         interests = {"genres": [], "keywords": [], "actors": [], "directors": []}
         try:
-            #  Kiểm tra file tồn tại và có cột timestamp không
             if os.path.exists(self.view_logs_path):
                 df_view = pd.read_csv(self.view_logs_path)
                 if 'timestamp' in df_view.columns and not df_view.empty:
@@ -144,10 +131,8 @@ class HybridRecommender:
                 df_search = pd.read_csv(self.search_logs_path)
                 if 'timestamp' in df_search.columns and not df_search.empty:
                     user_logs = df_search[df_search['user_id'] == user_id].sort_values('timestamp', ascending=False).head(10)
-                    
                     if not user_logs.empty:
                         if 'type' not in user_logs.columns: user_logs['type'] = 'keyword'
-                        
                         for _, row in user_logs.iterrows():
                             q = str(row['query'])
                             t = row['type']
@@ -157,7 +142,6 @@ class HybridRecommender:
                             else: interests['keywords'].append(q)
         except Exception as e:
             print(f"⚠️ Error analyzing interest: {e}")
-            
         return interests
 
     def recommend_based_on_behavior(self, user_id, top_k=12):
@@ -165,8 +149,7 @@ class HybridRecommender:
         
         profile = self.analyze_user_interest(user_id)
         candidates = {} 
-
-        # Cộng điểm
+        
         for g in list(set(profile['genres'])):
             mask = self.cb.movies['genres_str'].str.contains(g, na=False)
             for _, row in self.cb.movies[mask].sort_values('vote_count', ascending=False).head(10).iterrows():
@@ -190,46 +173,81 @@ class HybridRecommender:
                 candidates[row['movie_id']] = candidates.get(row['movie_id'], 0) + 1.0
 
         if not candidates:
-            print("   -> No behavior data found. Returning Top Popular.")
-            return self.cb.movies.sort_values(
-                by=["vote_count", "vote_average"], 
-                ascending=[False, False]
-            ).head(top_k)
+            return self.cb.movies.sort_values(by=["vote_count", "vote_average"], ascending=[False, False]).head(top_k)
 
         final_scores = [{"movie_id": k, "score": v} for k, v in candidates.items()]
         final_scores.sort(key=lambda x: x["score"], reverse=True)
         top_ids = [x["movie_id"] for x in final_scores[:top_k]]
-        
         return self.cb.movies[self.cb.movies['movie_id'].isin(top_ids)]
 
     # ====================================================
-    # 4. GỢI Ý KHI XEM PHIM
+    # 4. GỢI Ý KHI XEM PHIM (CHI TIẾT) - [LOGIC ĐÃ SỬA]
     # ====================================================
     def get_recommendations_for_viewing(self, user_id, current_movie_id, top_k=10, current_rating=None):
-        if user_id not in self.svd.ratings["user_id"].values:
-            return self.cb.recommend_by_movie(current_movie_id, top_k)
-
+        """
+        Kết hợp: KNN + CB + SVD + [NEW] Collection Bonus
+        Logic sửa đổi: Tra cứu collection_id trực tiếp trong movies_clean.csv
+        """
+        # A. Trọng số cảm xúc (nếu user vừa rate xong)
         item_weight = 1.0 
         if current_rating is not None:
             if current_rating <= 2.5: item_weight = 0.1 
             elif current_rating >= 4.0: item_weight = 1.2
 
+        # B. Lấy ứng viên từ KNN và Content-Based
         candidates_knn = self._get_knn_candidates(current_movie_id)
         candidates_cb = self._get_cb_candidates(current_movie_id)
         
-        all_ids = set(candidates_knn.keys()) | set(candidates_cb.keys())
+        # C. [LOGIC MỚI] SERIES BOOST - Tra trong bảng Movies
+        collection_bonus = {}
+        if 'collection_id' in self.cb.movies.columns:
+            try:
+                # 1. Tìm collection_id của phim đang xem
+                curr_row = self.cb.movies[self.cb.movies['movie_id'] == current_movie_id]
+                
+                if not curr_row.empty:
+                    # Lấy giá trị collection_id
+                    coll_val = curr_row.iloc[0]['collection_id']
+                    
+                    # Kiểm tra xem có thuộc collection nào không (khác NaN và khác 0)
+                    if pd.notna(coll_val) and coll_val != 0 and str(coll_val) != 'nan':
+                        
+                        # 2. Lọc ra các phim khác có cùng collection_id
+                        siblings_mask = self.cb.movies['collection_id'] == coll_val
+                        siblings = self.cb.movies[siblings_mask]['movie_id'].tolist()
+                        
+                        # 3. Cộng điểm thưởng
+                        for sib_id in siblings:
+                            if sib_id != current_movie_id:
+                                collection_bonus[sib_id] = 5.0 # Điểm thưởng lớn để lên Top
+            except Exception as e:
+                print(f"⚠️ Error in Series Boost logic: {e}")
+
+        # D. Tổng hợp tất cả ID ứng viên
+        all_ids = set(candidates_knn.keys()) | set(candidates_cb.keys()) | set(collection_bonus.keys())
         if current_movie_id in all_ids: all_ids.remove(current_movie_id)
 
+        # E. Tính điểm Hybrid
         final_scores = []
         for mid in all_ids:
             score_knn = candidates_knn.get(mid, 0.0) 
             score_cb = candidates_cb.get(mid, 0.0)
+            score_series = collection_bonus.get(mid, 0.0)
+            
+            # Lấy điểm SVD (nếu user cũ)
             try: 
-                pred = self.svd.model.predict(user_id, mid).est
-                score_svd = pred / 10.0
+                if user_id in self.svd.ratings['user_id'].values:
+                    pred = self.svd.model.predict(user_id, mid).est
+                    score_svd = pred / 10.0
+                else: score_svd = 0.0
             except: score_svd = 0.0
             
-            final_score = (score_knn * 0.4 * item_weight) + (score_cb * 0.3 * item_weight) + (score_svd * 0.3)
+            # Công thức Hybrid
+            final_score = (score_knn * 0.4 * item_weight) + \
+                          (score_cb * 0.3 * item_weight) + \
+                          (score_svd * 0.3) + \
+                          score_series 
+            
             final_scores.append({"movie_id": mid, "score": final_score})
 
         final_scores.sort(key=lambda x: x["score"], reverse=True)
@@ -257,44 +275,20 @@ class HybridRecommender:
     # 5. RATE & UPDATE 
     # ====================================================
     def rate_movie(self, user_id, movie_id, rating_val):
-        """
-        Lưu đánh giá. Nếu User ID chưa tồn tại trong users_clean.csv, tự động thêm mới.
-        """
         # --- BƯỚC 1: KIỂM TRA VÀ TẠO USER MỚI ---
         try:
-            # Đọc file user hiện tại
-            # Dùng try-except để tránh crash nếu file bị lỗi format
             if os.path.exists(self.users_path):
                 users_df = pd.read_csv(self.users_path)
-                
-                # Nếu user_id chưa có trong danh sách
                 if user_id not in users_df['user_id'].values:
                     print(f"🆕 New User Detected: {user_id}. Adding to database...")
-                    
-                    # Tạo dòng user mới (chỉ cần ID)
-                    new_user_row = pd.DataFrame([{"user_id": user_id, "username" : "anonymous"}])
-                    
-                    # Ghi nối vào file users_clean.csv
-                    new_user_row.to_csv(self.users_path, mode='a', header=False, index=False)
-                    print("✅ User added to users_clean.csv")
+                    pd.DataFrame([{"user_id": user_id, "username": "anonymous"}]).to_csv(self.users_path, mode='a', header=False, index=False)
             else:
-                # Nếu file chưa tồn tại, tạo mới luôn
-                print(f"🆕 Creating new users file with user: {user_id}")
                 pd.DataFrame([{"user_id": user_id}]).to_csv(self.users_path, index=False)
-                
-        except Exception as e:
-            print(f"⚠️ Error checking/creating user: {e}")
+        except Exception as e: print(f"⚠️ User check error: {e}")
 
         # --- BƯỚC 2: LƯU RATING ---
         rating_norm = rating_val * 2.0 
-        new_row = {
-            "id": int(time.time()),
-            "user_id": user_id, 
-            "movie_id": movie_id, 
-            "rating": rating_val, 
-            "timestamp": int(time.time()),
-            "rating_norm": rating_norm
-        }
+        new_row = {"id": int(time.time()), "user_id": user_id, "movie_id": movie_id, "rating": rating_val, "timestamp": int(time.time()), "rating_norm": rating_norm}
         pd.DataFrame([new_row]).to_csv(self.ratings_path, mode='a', header=False, index=False)
         print(f"⭐ Rated: User {user_id} -> Movie {movie_id} ({rating_val}*)")
 
