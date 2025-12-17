@@ -11,22 +11,28 @@ from recommender.knn_recommender import KNNRecommender
 
 
 class HybridRecommender:
-    def __init__(self, data_dir="./data_clean", cache_dir="./cache_recommender"):
+    def __init__(self, ratings_df, data_dir="./data_clean", cache_dir="./cache_recommender"):
         print("🚀 Initializing Hybrid System (Final - Fixed Collection Logic)...")
         
         self.data_dir = data_dir
+        # Giữ lại các path cho file nhỏ (Movies, Users, Logs...)
         self.movies_path = f"{data_dir}/movies_clean.csv"
-        self.ratings_path = f"{data_dir}/ratings_clean.csv"
         self.users_path = f"{data_dir}/users_clean.csv"
         self.collection_path = f"{data_dir}/collection_clean.csv"
         
-        # File Log hành vi
+        # --- THAY ĐỔI QUAN TRỌNG ---
+        # Không đọc file ở đây nữa. Nhận DataFrame từ bên ngoài truyền vào
+        self.ratings = ratings_df 
+        
+        # File Log hành vi (Giữ nguyên nếu file này nhỏ và có sẵn trên Git)
         self.search_logs_path = f"{data_dir}/search_history.csv"
         self.view_logs_path = f"{data_dir}/view_history.csv"
         
         self._init_log_files()
 
         # --- KHỞI TẠO 3 MODEL CON ---
+        
+        # 1. Content Based (Thường không cần ratings, giữ nguyên)
         self.cb = ContentBasedRecommender(
             movies_path=self.movies_path,
             genres_path=f"{data_dir}/genres_clean.csv",
@@ -40,20 +46,21 @@ class HybridRecommender:
             cache_dir=f"{cache_dir}/cache_cb"
         )
 
+        # 2. KNN Recommender (Cần sửa class này để nhận DF)
         self.knn = KNNRecommender(
-            ratings_path=self.ratings_path,
+            ratings_df=self.ratings,   # <--- Truyền DataFrame, không truyền path
             movies_path=self.movies_path,
             cache_dir=f"{cache_dir}/cache_knn"
         )
 
+        # 3. SVD Recommender (Cần sửa class này để nhận DF)
         self.svd = SVDRecommender(
-            ratings_path=self.ratings_path,
+            ratings_df=self.ratings,   # <--- Truyền DataFrame, không truyền path
             movies_path=self.movies_path,
             cache_dir=f"{cache_dir}/cache_svd"
         )
 
         self._load_all_models()
-
     def _init_log_files(self):
         if not os.path.exists(self.users_path):
             pd.DataFrame(columns=["user_id"]).to_csv(self.users_path, index=False)
@@ -294,3 +301,4 @@ class HybridRecommender:
 
         # --- BƯỚC 3: CẬP NHẬT KNN RAM ---
         self.knn.update_model_realtime(user_id, movie_id, rating_norm)
+
