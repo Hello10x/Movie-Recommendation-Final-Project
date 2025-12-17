@@ -8,11 +8,12 @@ from sklearn.neighbors import NearestNeighbors
 class KNNRecommender:
     """
     Item-based CF using Scipy Sparse Matrix
-    FIX: Xử lý trùng lặp đánh giá (Dedup logic)
+    UPDATED: Nhận DataFrame trực tiếp từ bên ngoài (Streamlit/Google Drive)
     """
 
-    def __init__(self, ratings_path, movies_path, cache_dir="./cache_recommender/cache_knn"):
-        self.ratings_path = ratings_path
+    # --- SỬA ĐỔI 1: Nhận ratings_df thay vì ratings_path ---
+    def __init__(self, ratings_df, movies_path, cache_dir="./cache_recommender/cache_knn"):
+        self.ratings = ratings_df  # <--- Gán trực tiếp dữ liệu vào biến
         self.movies_path = movies_path
         self.cache_dir = cache_dir
 
@@ -20,7 +21,6 @@ class KNNRecommender:
         self.matrix_path = os.path.join(cache_dir, 'sparse_matrix.pkl')
         self.mappings_path = os.path.join(cache_dir, 'mappings.pkl')
 
-        self.ratings = None
         self.movies = None
         
         self.sparse_matrix = None
@@ -31,29 +31,27 @@ class KNNRecommender:
         self.user_to_idx = {}
         self.idx_to_user = {}
 
+    # --- SỬA ĐỔI 2: Chỉ load movies, không load ratings nữa ---
     def load_data(self):
-        if not os.path.exists(self.movies_path) or not os.path.exists(self.ratings_path):
-             raise FileNotFoundError("❌ Data files not found!")
+        if not os.path.exists(self.movies_path):
+             raise FileNotFoundError(f"❌ Movies file not found at {self.movies_path}")
         
+        # Load thông tin phim (để lấy tên phim hiển thị)
         self.movies = pd.read_csv(self.movies_path)
         
-        # --- FIX 1: LOAD DỮ LIỆU THÔNG MINH ---
-        print("⚙️ Loading and Deduplicating Ratings...")
-        raw_ratings = pd.read_csv(self.ratings_path)
-        
-        # Sắp xếp theo timestamp giảm dần (cái mới nhất lên đầu)
-        # Giả sử file có cột 'timestamp', nếu không có thì nó lấy dòng cuối cùng (mặc định của drop_duplicates keep='last')
-        if 'timestamp' in raw_ratings.columns:
-            raw_ratings = raw_ratings.sort_values('timestamp', ascending=False)
-            
-        # Xóa các dòng trùng (User + Movie), chỉ giữ lại dòng đầu tiên (là dòng mới nhất do đã sort)
-        self.ratings = raw_ratings.drop_duplicates(subset=['user_id', 'movie_id'], keep='first')
-        
-        print(f"✅ Ratings loaded. Raw: {len(raw_ratings)} -> Clean: {len(self.ratings)} (Removed {len(raw_ratings) - len(self.ratings)} old duplicates)")
+        # Kiểm tra xem dữ liệu ratings truyền vào có ổn không
+        if self.ratings is None or self.ratings.empty:
+            print("⚠️ Warning: Ratings DataFrame is empty!")
+        else:
+            print(f"✅ Ratings ready in memory: {len(self.ratings)} rows.")
 
     def build_matrix(self):
         print("⚙️ Building Sparse Matrix...")
         
+        # Đảm bảo dữ liệu movies đã load
+        if self.movies is None:
+            self.load_data()
+
         # Tạo Mapping
         unique_movies = self.ratings['movie_id'].unique()
         unique_users = self.ratings['user_id'].unique()
@@ -65,7 +63,6 @@ class KNNRecommender:
         self.idx_to_user = {i: uid for i, uid in enumerate(unique_users)}
 
         # Map dữ liệu
-        # LƯU Ý: self.ratings lúc này đã sạch (không trùng), nên tạo matrix sẽ không bị cộng dồn
         row_users = self.ratings['user_id'].map(self.user_to_idx).values
         col_movies = self.ratings['movie_id'].map(self.movie_to_idx).values
         data_ratings = self.ratings['rating_norm'].values
@@ -105,8 +102,7 @@ class KNNRecommender:
                     self.user_to_idx = maps['u2i']
                     self.idx_to_user = maps['i2u']
                 
-                # Load luôn ratings sạch vào RAM để phục vụ update realtime
-                # (Nếu không load lại thì update sẽ bị thiếu dữ liệu cũ)
+                # Load movies để lấy tên phim
                 self.load_data() 
                 
                 print("✅ KNN Cache Loaded.")
@@ -127,20 +123,19 @@ class KNNRecommender:
         return self.movies[self.movies["movie_id"].isin(similar_ids)][["movie_id", "title"]].head(top_k)
 
     # ===============================
-    # FIX 2: UPDATE REALTIME THÔNG MINH
+    # UPDATE REALTIME (Giữ nguyên logic nhưng dùng self.ratings có sẵn)
     # ===============================
     def update_model_realtime(self, user_id, movie_id, rating_norm):
         print(f"⚡ Updating KNN (Smart): U={user_id}, M={movie_id}, Score={rating_norm}")
         
-        # 1. Kiểm tra xem User này đã từng chấm phim này chưa
-        # Tạo mask (bộ lọc)
+        # Tạo mask
         mask = (self.ratings['user_id'] == user_id) & (self.ratings['movie_id'] == movie_id)
         
         if self.ratings[mask].empty:
             # Case A: Chưa từng chấm -> Thêm dòng mới
             new_row = pd.DataFrame([{
                 "user_id": user_id, "movie_id": movie_id, "rating_norm": rating_norm, "timestamp": 0
-            }]) # Timestamp ko quan trọng vì mình vừa thêm vào cuối
+            }]) 
             self.ratings = pd.concat([self.ratings, new_row], ignore_index=True)
             print("   -> Inserted new rating.")
         else:
@@ -148,7 +143,7 @@ class KNNRecommender:
             self.ratings.loc[mask, 'rating_norm'] = rating_norm
             print("   -> Overwrote existing rating.")
 
-        # 2. Rebuild Matrix (Giờ đây self.ratings đã sạch, không bị trùng)
+        # Rebuild & Fit lại
         self.build_matrix()
         self.knn_model.fit(self.sparse_matrix)
         self.save_cache()
