@@ -2,12 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 
-# Import class Hybrid
-try:
-    from hybrid_recommender import HybridRecommender
-except ImportError:
-    st.error("❌ Lỗi: Không tìm thấy file 'hybrid_recommender.py'.")
-    st.stop()
+from hybrid_recommender import HybridRecommender
 
 st.set_page_config(page_title="MovieFlix AI", page_icon="🍿", layout="wide", initial_sidebar_state="expanded")
 
@@ -420,4 +415,5 @@ elif st.session_state['page'] == 'viz':
             
         st.markdown("---")
         st.subheader("Phân bố độ phổ biến")
+
         render_chart("popularity_hist.png", "Histogram Popularity")
