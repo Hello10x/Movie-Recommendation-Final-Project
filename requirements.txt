@@ -4,4 +4,3 @@ streamlit
 pandas
 scikit-learn
 scipy
-
