@@ -1,0 +1,7 @@
+# Bỏ qua thư mục cache 
+cache_recommender/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+venv/
